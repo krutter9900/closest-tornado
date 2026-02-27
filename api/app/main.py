@@ -1,0 +1,150 @@
+import json
+from fastapi import FastAPI, HTTPException, Request
+from sqlalchemy import text
+
+from .db import engine, run_migrations
+from .geocode import geocode_oneline
+from .schemas import ClosestTornadoRequest, ClosestTornadoResponse
+from .web import router as web_router
+from .guardrails import SimpleRateLimiter, RateLimitConfig, TTLCache
+
+app = FastAPI(title="Closest Tornado API", version="0.4.0")
+app.include_router(web_router)
+
+# Guardrails (single-instance / local)
+rate_limiter = SimpleRateLimiter(RateLimitConfig(max_requests=30, window_seconds=60))
+result_cache = TTLCache(ttl_seconds=6 * 3600, max_items=5000)
+
+
+@app.on_event("startup")
+def _startup():
+    run_migrations()
+
+
+@app.get("/health")
+def health():
+    with engine.begin() as conn:
+        conn.execute(text("SELECT 1"))
+    return {"ok": True}
+
+
+@app.post("/closest-tornado", response_model=ClosestTornadoResponse)
+async def closest_tornado(req: ClosestTornadoRequest, request: Request):
+    # Rate limit (per IP)
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
+
+    # Geocode (do not log/store address)
+    try:
+        g = await geocode_oneline(req.address)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    lat, lon = g["lat"], g["lon"]
+
+    # Cache by rounded coordinates (no address stored)
+    lat_r = round(lat, 4)
+    lon_r = round(lon, 4)
+    cache_key = ("closest_v1", lat_r, lon_r)
+
+    cached = result_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Nearest query:
+    # - center_m: distance to track centerline
+    # - edge_m: distance to estimated damage-path edge (width/2 buffer) when width available
+    # - primary_m: edge_m if available else center_m
+    sql = text("""
+    WITH user_pt AS (
+      SELECT
+        ST_SetSRID(ST_Point(:lon, :lat), 4326) AS geom,
+        ST_SetSRID(ST_Point(:lon, :lat), 4326)::geography AS geog
+    ),
+    candidates AS (
+      SELECT
+        t.*,
+        ST_Distance((SELECT geog FROM user_pt), t.geog_line) AS center_m,
+        CASE
+          WHEN t.tor_width_yards IS NULL THEN NULL
+          ELSE GREATEST(
+            0,
+            ST_Distance((SELECT geog FROM user_pt), t.geog_line) - ((t.tor_width_yards * 0.9144) / 2.0)
+          )
+        END AS edge_m,
+        ST_AsGeoJSON(t.geom_line) AS track_geojson,
+        ST_AsGeoJSON(ST_ClosestPoint(t.geom_line, (SELECT geom FROM user_pt))) AS closest_pt_geojson
+      FROM tornado_event t
+      ORDER BY t.geog_line <-> (SELECT geog FROM user_pt)
+      LIMIT 200
+    ),
+    ranked AS (
+      SELECT *,
+        COALESCE(edge_m, center_m) AS primary_m
+      FROM candidates
+    )
+    SELECT *
+    FROM ranked
+    ORDER BY primary_m ASC
+    LIMIT 1;
+    """)
+
+    with engine.begin() as conn:
+        row = conn.execute(sql, {"lat": lat, "lon": lon}).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="No tornado data loaded.")
+
+    center_m = float(row["center_m"])
+    edge_m_val = row.get("edge_m")
+    edge_m = float(edge_m_val) if edge_m_val is not None else None
+
+    primary_m = edge_m if edge_m is not None else center_m
+    dist_km = primary_m / 1000.0
+    dist_miles = primary_m / 1609.344
+
+    distance_type = "estimated_damage_path_edge" if edge_m is not None else "centerline"
+
+    notes = [
+        "Tracks are built from Storm Events begin/end points; the real ground path can differ.",
+        "Geocoding uses U.S. Census first, with OpenStreetMap Nominatim fallback for non-street inputs.",
+    ]
+    if edge_m is not None:
+        notes.append("Distance uses reported tornado width to estimate distance to the damage-path edge (width/2 buffer).")
+    else:
+        notes.append("Width was not available; distance is to the track centerline only.")
+
+    response = {
+        "query": {
+            "lat": lat,
+            "lon": lon,
+            "provider": g.get("provider"),
+            "match_type": g.get("match_type"),
+        },
+        "result": {
+            "event_id": int(row["event_id"]),
+            "distance_m": primary_m,
+            "distance_miles": dist_miles,
+            "distance_km": dist_km,
+            "distance_type": distance_type,
+            "tor_f_scale": row.get("tor_f_scale"),
+            "begin_dt": row.get("begin_dt").isoformat() if row.get("begin_dt") else None,
+            "end_dt": row.get("end_dt").isoformat() if row.get("end_dt") else None,
+            "state": row.get("state"),
+            "cz_name": row.get("cz_name"),
+            "wfo": row.get("wfo"),
+            "tor_length_miles": float(row["tor_length_miles"]) if row.get("tor_length_miles") is not None else None,
+            "tor_width_yards": int(row["tor_width_yards"]) if row.get("tor_width_yards") is not None else None,
+            "track_geojson": json.loads(row["track_geojson"]) if row["track_geojson"] else None,
+            "closest_point_geojson": json.loads(row["closest_pt_geojson"]) if row["closest_pt_geojson"] else None,
+            "notes": notes,
+            "data_source": {
+                "name": "NOAA NCEI Storm Events Database (Storm Data)",
+                "coverage": "1950–present (updated periodically)",
+            },
+        },
+    }
+
+    result_cache.set(cache_key, response)
+    return response

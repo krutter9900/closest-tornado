@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: tornado
+      POSTGRES_USER: tornado
+      POSTGRES_PASSWORD: tornado
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - noaa_data:/data
+
+  api:
+    build: ./api
+    environment:
+      DATABASE_URL: postgresql+psycopg://tornado:tornado@db:5432/tornado
+      CENSUS_BENCHMARK: Public_AR_Current
+      CENSUS_VINTAGE: Current_Current
+      NOMINATIM_USER_AGENT: "closest-tornado-dev (local)"
+      # Optional: add an email for Nominatim identification
+      # NOMINATIM_EMAIL: "you@example.com"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    volumes:
+      - noaa_data:/data
+
+volumes:
+  pgdata:
+  noaa_data:
