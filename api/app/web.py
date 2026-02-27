@@ -48,7 +48,7 @@ def home():
     // Simple OSM style via MapLibre demo tiles (fine for MVP dev)
     const map = new maplibregl.Map({
       container: 'map',
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
       center: [-97.5164, 35.4676],
       zoom: 10
     });
@@ -125,6 +125,7 @@ def home():
       const coords = r.track_geojson.coordinates.slice();
       coords.push([q.lon, q.lat]);
       const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+      map.addControl(new maplibregl.NavigationControl(), 'top-right');
       map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
     }
 
