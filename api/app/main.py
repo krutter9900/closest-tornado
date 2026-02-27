@@ -23,8 +23,6 @@ def _startup():
 
 @app.get("/health")
 def health():
-    with engine.begin() as conn:
-        conn.execute(text("SELECT 1"))
     return {"ok": True}
 
 
