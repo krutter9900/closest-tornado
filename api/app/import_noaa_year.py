@@ -3,8 +3,9 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 from sqlalchemy import create_engine, text
 
 BASE_URL = "https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/"
@@ -37,13 +38,16 @@ NEEDED = [
     "BEGIN_LAT", "BEGIN_LON", "END_LAT", "END_LON",
 ]
 
+
 def fnum(x):
     x = (x or "").strip()
     return float(x) if x else None
 
+
 def inum(x):
     x = (x or "").strip()
     return int(float(x)) if x else None
+
 
 def parse_dt(s: str | None) -> str | None:
     s = (s or "").strip()
@@ -65,11 +69,13 @@ def parse_dt(s: str | None) -> str | None:
     # Give up gracefully (don’t break import)
     return None
 
+
 def make_linestring_wkt(begin_lon, begin_lat, end_lon, end_lat) -> str:
     # If end is missing, make a zero-length line at the begin point
     if end_lon is None or end_lat is None:
         end_lon, end_lat = begin_lon, begin_lat
     return f"LINESTRING({begin_lon} {begin_lat}, {end_lon} {end_lat})"
+
 
 def latest_details_filename(year: int) -> str:
     html = subprocess.check_output(["curl", "-s", BASE_URL], text=True)
@@ -80,8 +86,33 @@ def latest_details_filename(year: int) -> str:
     matches.sort(key=lambda t: t[1], reverse=True)
     return matches[0][0]
 
+
+def latest_details_files_by_year(start_year: int = 1950, end_year: int | None = None) -> dict[int, dict[str, str]]:
+    """Return the newest NOAA details file per year using the cYYYYMMDD revision token."""
+    if end_year is None:
+        end_year = datetime.utcnow().year
+
+    html = subprocess.check_output(["curl", "-s", BASE_URL], text=True)
+    pattern = re.compile(r"(StormEvents_details-ftp_v1\.0_d(\d{4})_c(\d+)\.csv\.gz)")
+
+    latest: dict[int, dict[str, str]] = {}
+    for filename, year_s, revision in pattern.findall(html):
+        year = int(year_s)
+        if year < start_year or year > end_year:
+            continue
+
+        existing = latest.get(year)
+        if existing is None or revision > existing["revision"]:
+            latest[year] = {"filename": filename, "revision": revision}
+
+    return latest
+
+
 def ensure_downloaded(year: int) -> Path:
-    gz_name = latest_details_filename(year)
+    return ensure_downloaded_filename(latest_details_filename(year))
+
+
+def ensure_downloaded_filename(gz_name: str) -> Path:
     csv_name = gz_name[:-3]  # strip .gz
     csv_path = DATA_DIR / csv_name
     if csv_path.exists():
@@ -95,7 +126,9 @@ def ensure_downloaded(year: int) -> Path:
         raise SystemExit(f"Expected CSV not found after gunzip: {csv_path}")
     return csv_path
 
-def import_year(csv_path: Path) -> int:
+
+def import_year(csv_path: Path) -> tuple[int, int]:
+    attempted = 0
     inserted = 0
     with engine.begin() as conn:
         with open(csv_path, newline="", encoding="utf-8") as f:
@@ -134,9 +167,11 @@ def import_year(csv_path: Path) -> int:
                     "end_lon": end_lon,
                     "geom_wkt": geom_wkt,
                 }
-                conn.execute(INSERT_SQL, params)
-                inserted += 1
-    return inserted
+                result = conn.execute(INSERT_SQL, params)
+                attempted += 1
+                inserted += int(result.rowcount or 0)
+    return attempted, inserted
+
 
 def main():
     if len(sys.argv) != 2:
@@ -145,8 +180,9 @@ def main():
 
     year = int(sys.argv[1])
     csv_path = ensure_downloaded(year)
-    n = import_year(csv_path)
-    print(f"Imported tornado rows (attempted) for {year}: {n}")
+    attempted, inserted = import_year(csv_path)
+    print(f"Imported tornado rows for {year}: attempted={attempted}, inserted={inserted}")
+
 
 if __name__ == "__main__":
     main()

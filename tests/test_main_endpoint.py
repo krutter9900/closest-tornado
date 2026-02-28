@@ -53,5 +53,16 @@ class EndpointTests(unittest.TestCase):
                 self.assertAlmostEqual(data["result"]["selected_distance"], 1.609344, places=6)
 
 
+    def test_admin_refresh_requires_token(self):
+        with patch.object(main, "run_migrations", lambda: None), patch.object(main.settings, "admin_refresh_token", "secret"), patch.object(main, "refresh_updates", return_value=[]):
+            with TestClient(main.app) as client:
+                res = client.post("/admin/refresh-noaa")
+                self.assertEqual(res.status_code, 401)
+
+                ok = client.post("/admin/refresh-noaa", headers={"Authorization": "Bearer secret"})
+                self.assertEqual(ok.status_code, 200)
+                self.assertEqual(ok.json()["updated_years"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

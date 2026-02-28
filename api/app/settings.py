@@ -8,5 +8,6 @@ class Settings(BaseSettings):
     # Nominatim fallback (OSM)
     nominatim_user_agent: str = "closest-tornado-dev (local)"
     nominatim_email: str | None = None  # optional, but recommended for identification
+    admin_refresh_token: str | None = None
 
 settings = Settings()

@@ -1,13 +1,15 @@
 import json
 import logging
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from sqlalchemy import text
 
 from .db import engine, run_migrations
 from .geocode import GeocoderUnavailableError, NoGeocodeMatchError, geocode_oneline
 from .guardrails import RateLimitConfig, SimpleRateLimiter, TTLCache
 from .schemas import ClosestTornadoRequest, ClosestTornadoResponse
+from .import_noaa_updates import refresh_updates
+from .settings import settings
 from .web import router as web_router
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,42 @@ def _startup():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/meta")
+def meta():
+    sql = text("""
+    SELECT
+      m.data_last_refreshed,
+      m.dataset_version,
+      m.updated_at,
+      COUNT(t.event_id) AS tornado_event_count,
+      MAX(t.begin_dt) AS max_begin_dt
+    FROM dataset_refresh_meta m
+    LEFT JOIN tornado_event t ON TRUE
+    WHERE m.id = 1
+    GROUP BY m.data_last_refreshed, m.dataset_version, m.updated_at;
+    """)
+
+    with engine.begin() as conn:
+        row = conn.execute(sql).mappings().first()
+
+    if not row:
+        return {
+            "data_last_refreshed": None,
+            "dataset_version": None,
+            "metadata_updated_at": None,
+            "tornado_event_count": 0,
+            "latest_event_begin_dt": None,
+        }
+
+    return {
+        "data_last_refreshed": row.get("data_last_refreshed").isoformat() if row.get("data_last_refreshed") else None,
+        "dataset_version": row.get("dataset_version"),
+        "metadata_updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+        "tornado_event_count": int(row.get("tornado_event_count") or 0),
+        "latest_event_begin_dt": row.get("max_begin_dt").isoformat() if row.get("max_begin_dt") else None,
+    }
 
 
 def _notes_for_row(edge_m: float | None) -> list[str]:
@@ -216,3 +254,19 @@ def closest_tornado_by_coords(
     )
     result_cache.set(cache_key, response)
     return response
+
+
+@app.post("/admin/refresh-noaa")
+def refresh_noaa_data(authorization: str | None = Header(default=None)):
+    expected = settings.admin_refresh_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin refresh token is not configured.")
+
+    if authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    import_log = refresh_updates(start_year=1950)
+    return {
+        "updated_years": len(import_log),
+        "imports": import_log,
+    }
