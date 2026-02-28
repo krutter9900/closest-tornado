@@ -1,9 +1,24 @@
 import asyncio
+
 import httpx
+
 from .settings import settings
 
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+
+class GeocodingError(Exception):
+    pass
+
+
+class NoGeocodeMatchError(GeocodingError):
+    pass
+
+
+class GeocoderUnavailableError(GeocodingError):
+    pass
+
 
 async def _geocode_census(address: str) -> dict:
     params = {
@@ -13,7 +28,6 @@ async def _geocode_census(address: str) -> dict:
         "format": "json",
     }
 
-    # Retry on 5xx (like the 502 you saw)
     delays = [0.5, 1.0, 2.0, 4.0]
     async with httpx.AsyncClient(timeout=20.0) as client:
         for delay in [0.0] + delays:
@@ -28,7 +42,7 @@ async def _geocode_census(address: str) -> dict:
             data = r.json()
             matches = data.get("result", {}).get("addressMatches", [])
             if not matches:
-                raise ValueError("NO_MATCH")
+                raise NoGeocodeMatchError("NO_MATCH")
 
             best = matches[0]
             coords = best["coordinates"]
@@ -39,10 +53,10 @@ async def _geocode_census(address: str) -> dict:
                 "provider": "us_census",
             }
 
-    raise ValueError("Census geocoder temporarily unavailable.")
+    raise GeocoderUnavailableError("Census geocoder temporarily unavailable.")
+
 
 async def _geocode_nominatim(query: str) -> dict:
-    # Nominatim requires an identifying User-Agent; email param is supported. :contentReference[oaicite:1]{index=1}
     headers = {"User-Agent": settings.nominatim_user_agent}
     params = {
         "q": query,
@@ -54,7 +68,6 @@ async def _geocode_nominatim(query: str) -> dict:
     if settings.nominatim_email:
         params["email"] = settings.nominatim_email
 
-    # Be gentle: small retry + brief spacing to avoid hammering
     delays = [0.5, 1.0, 2.0]
     async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
         for delay in [0.0] + delays:
@@ -68,7 +81,7 @@ async def _geocode_nominatim(query: str) -> dict:
 
             data = r.json()
             if not data:
-                raise ValueError("No geocoding match found for that input.")
+                raise NoGeocodeMatchError("No geocoding match found for that input.")
 
             best = data[0]
             return {
@@ -78,15 +91,11 @@ async def _geocode_nominatim(query: str) -> dict:
                 "provider": "nominatim",
             }
 
-    raise ValueError("Nominatim temporarily unavailable.")
+    raise GeocoderUnavailableError("Nominatim temporarily unavailable.")
+
 
 async def geocode_oneline(address: str) -> dict:
-    # 1) Try Census first (best for full street addresses)
     try:
         return await _geocode_census(address)
-    except ValueError as e:
-        # NO_MATCH: fall back; other errors: also fall back to keep UX smooth
-        pass
-
-    # 2) Fall back to Nominatim (better for “city, state”, ZIP, place names)
-    return await _geocode_nominatim(address)
+    except (NoGeocodeMatchError, GeocoderUnavailableError):
+        return await _geocode_nominatim(address)
