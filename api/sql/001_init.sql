@@ -18,6 +18,26 @@ CREATE TABLE IF NOT EXISTS tornado_event (
   geog_line geography(LineString) NULL
 );
 
+CREATE TABLE IF NOT EXISTS noaa_details_version (
+  year INTEGER PRIMARY KEY,
+  filename TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  attempted_rows INTEGER NOT NULL,
+  inserted_rows INTEGER NOT NULL,
+  imported_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dataset_refresh_meta (
+  id SMALLINT PRIMARY KEY,
+  data_last_refreshed TIMESTAMP NULL,
+  dataset_version TEXT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO dataset_refresh_meta (id, data_last_refreshed, dataset_version)
+VALUES (1, NULL, NULL)
+ON CONFLICT (id) DO NOTHING;
+
 CREATE INDEX IF NOT EXISTS tornado_event_geog_gist
   ON tornado_event
   USING GIST (geog_line);

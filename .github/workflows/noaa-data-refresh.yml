@@ -1,0 +1,25 @@
+name: NOAA Data Refresh
+
+on:
+  schedule:
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh-noaa-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trigger NOAA incremental import on Render
+        env:
+          RENDER_DATA_REFRESH_URL: ${{ secrets.RENDER_DATA_REFRESH_URL }}
+          RENDER_DATA_REFRESH_TOKEN: ${{ secrets.RENDER_DATA_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$RENDER_DATA_REFRESH_URL" ] || [ -z "$RENDER_DATA_REFRESH_TOKEN" ]; then
+            echo "Missing RENDER_DATA_REFRESH_URL or RENDER_DATA_REFRESH_TOKEN secret" >&2
+            exit 1
+          fi
+
+          curl --fail-with-body -X POST \
+            -H "Authorization: Bearer $RENDER_DATA_REFRESH_TOKEN" \
+            "$RENDER_DATA_REFRESH_URL"
