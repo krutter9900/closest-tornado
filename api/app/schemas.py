@@ -45,6 +45,7 @@ class TornadoResult(BaseModel):
     tor_width_yards: Optional[int] = None
     track_geojson: Dict[str, Any]
     closest_point_geojson: Dict[str, Any]
+    corridor_geojson: Optional[Dict[str, Any]] = None
     notes: List[str]
     data_source: Dict[str, str]
 
@@ -52,3 +53,5 @@ class TornadoResult(BaseModel):
 class ClosestTornadoResponse(BaseModel):
     query: GeocodeInfo
     result: TornadoResult
+    top_results: List[TornadoResult]
+    share_url: str
