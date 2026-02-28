@@ -151,7 +151,7 @@ def home():
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'imperial' }), 'bottom-right');
 
     function resetLayers() {
-      for (const id of ['corridor','track', 'closest', 'user']) {
+      for (const id of ['corridor-outline', 'corridor', 'track', 'closest', 'user']) {
         if (map.getLayer(id)) map.removeLayer(id);
         if (map.getSource(id)) map.removeSource(id);
       }
@@ -193,7 +193,7 @@ def home():
       if (!selected) return;
 
       statusEl.innerHTML = selected
-        ? `Showing <strong>${selected.selected_distance.toFixed(3)} ${selected.selected_unit}</strong> (${selected.distance_type.replaceAll('_', ' ')})`
+        ? `Showing <strong>${selected.selected_distance.toFixed(3)} ${selected.selected_unit}</strong> (${selected.distance_type.replaceAll('_', ' ')})${selected.corridor_geojson ? '' : ' · corridor unavailable for this event'}`
         : 'No selection';
 
       resetLayers();
@@ -204,7 +204,13 @@ def home():
           id: 'corridor',
           type: 'fill',
           source: 'corridor',
-          paint: { 'fill-color': '#f97316', 'fill-opacity': 0.22 }
+          paint: { 'fill-color': '#f97316', 'fill-opacity': 0.35 }
+        });
+        map.addLayer({
+          id: 'corridor-outline',
+          type: 'line',
+          source: 'corridor',
+          paint: { 'line-color': '#fb923c', 'line-width': 2, 'line-opacity': 0.95 }
         });
       }
 
