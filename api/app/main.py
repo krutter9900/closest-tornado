@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from sqlalchemy import text
@@ -90,6 +91,17 @@ def _serialize_row(row, units: str):
     selected_distance = dist_miles if units == "miles" else dist_km
     distance_type = "estimated_damage_path_edge" if edge_m is not None else "centerline"
 
+    def normalize_future_shifted(dt_value):
+        if dt_value is None:
+            return None
+        current_year = datetime.utcnow().year
+        if current_year + 1 < dt_value.year <= current_year + 100:
+            return dt_value.replace(year=dt_value.year - 100)
+        return dt_value
+
+    begin_dt = normalize_future_shifted(row.get("begin_dt"))
+    end_dt = normalize_future_shifted(row.get("end_dt"))
+
     return {
         "event_id": int(row["event_id"]),
         "distance_m": primary_m,
@@ -99,8 +111,8 @@ def _serialize_row(row, units: str):
         "selected_distance": selected_distance,
         "distance_type": distance_type,
         "tor_f_scale": row.get("tor_f_scale"),
-        "begin_dt": row.get("begin_dt").isoformat() if row.get("begin_dt") else None,
-        "end_dt": row.get("end_dt").isoformat() if row.get("end_dt") else None,
+        "begin_dt": begin_dt.isoformat() if begin_dt else None,
+        "end_dt": end_dt.isoformat() if end_dt else None,
         "state": row.get("state"),
         "cz_name": row.get("cz_name"),
         "wfo": row.get("wfo"),

@@ -53,6 +53,33 @@ class EndpointTests(unittest.TestCase):
                 self.assertAlmostEqual(data["result"]["selected_distance"], 1.609344, places=6)
 
 
+    def test_future_shifted_years_are_normalized(self):
+        with patch.object(main, "run_migrations", lambda: None), patch.object(main, "geocode_oneline", AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"})), patch.object(main.engine, "begin", fake_begin):
+            original_execute = FakeConn.execute
+
+            def execute_with_future_dates(self, *args, **kwargs):
+                result = original_execute(self, *args, **kwargs).first()
+                result["begin_dt"] = main.datetime(2063, 4, 29, 22, 0, 0)
+                result["end_dt"] = main.datetime(2063, 4, 29, 22, 10, 0)
+
+                class _Result:
+                    def mappings(self_inner):
+                        return self_inner
+
+                    def first(self_inner):
+                        return result
+
+                return _Result()
+
+            with patch.object(FakeConn, "execute", execute_with_future_dates):
+                with TestClient(main.app) as client:
+                    res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles"})
+                    self.assertEqual(res.status_code, 200)
+                    data = res.json()
+                    self.assertEqual(data["result"]["begin_dt"], "1963-04-29T22:00:00")
+                    self.assertEqual(data["result"]["end_dt"], "1963-04-29T22:10:00")
+
+
     def test_admin_refresh_requires_token(self):
         with patch.object(main, "run_migrations", lambda: None), patch.object(main.settings, "admin_refresh_token", "secret"), patch.object(main, "refresh_updates", return_value=[]):
             with TestClient(main.app) as client:
