@@ -1,10 +1,16 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/db")
 
-from api.app.import_noaa_year import latest_details_files_by_year, make_linestring_wkt, parse_dt
+from api.app.import_noaa_year import (
+    latest_details_files_by_year,
+    make_linestring_wkt,
+    parse_dt,
+    source_year_from_filename,
+)
 
 
 class ImportUtilsTests(unittest.TestCase):
@@ -12,10 +18,20 @@ class ImportUtilsTests(unittest.TestCase):
         self.assertEqual(parse_dt("01-Jan-13 05:30:00"), "2013-01-01T05:30:00")
         self.assertEqual(parse_dt("2013-01-01 05:30:00"), "2013-01-01T05:30:00")
 
+    def test_parse_dt_adjusts_two_digit_year_using_source_year(self):
+        # %y would parse 68 as 2068 without adjustment.
+        self.assertEqual(
+            parse_dt("01-Jan-68 05:30:00", source_year=1968),
+            "1968-01-01T05:30:00",
+        )
+
+    def test_source_year_from_filename(self):
+        p = Path("/data/StormEvents_details-ftp_v1.0_d1953_c20250520.csv")
+        self.assertEqual(source_year_from_filename(p), 1953)
+
     def test_linestring_handles_missing_end(self):
         wkt = make_linestring_wkt(-97.5, 35.4, None, None)
         self.assertEqual(wkt, "LINESTRING(-97.5 35.4, -97.5 35.4)")
-
 
     def test_latest_details_files_by_year_selects_latest_revision(self):
         listing = """

@@ -21,6 +21,33 @@ UPSERT_YEAR_SQL = text(
     """
 )
 
+
+CLEANUP_FUTURE_DATES_SQL = text(
+    """
+    UPDATE tornado_event
+    SET begin_dt = CASE
+            WHEN begin_dt IS NOT NULL
+                 AND EXTRACT(YEAR FROM begin_dt) > :max_expected_year
+                 AND EXTRACT(YEAR FROM begin_dt) <= :max_shiftable_year
+            THEN begin_dt - INTERVAL '100 years'
+            ELSE begin_dt
+        END,
+        end_dt = CASE
+            WHEN end_dt IS NOT NULL
+                 AND EXTRACT(YEAR FROM end_dt) > :max_expected_year
+                 AND EXTRACT(YEAR FROM end_dt) <= :max_shiftable_year
+            THEN end_dt - INTERVAL '100 years'
+            ELSE end_dt
+        END
+    WHERE (begin_dt IS NOT NULL
+           AND EXTRACT(YEAR FROM begin_dt) > :max_expected_year
+           AND EXTRACT(YEAR FROM begin_dt) <= :max_shiftable_year)
+       OR (end_dt IS NOT NULL
+           AND EXTRACT(YEAR FROM end_dt) > :max_expected_year
+           AND EXTRACT(YEAR FROM end_dt) <= :max_shiftable_year);
+    """
+)
+
 UPDATE_META_SQL = text(
     """
     UPDATE dataset_refresh_meta
@@ -36,6 +63,20 @@ def _existing_versions() -> dict[int, str]:
     with engine.begin() as conn:
         rows = conn.execute(text("SELECT year, revision FROM noaa_details_version")).mappings().all()
     return {int(row["year"]): str(row["revision"]) for row in rows}
+
+
+
+def cleanup_future_dates() -> int:
+    current_year = datetime.now(timezone.utc).year
+    with engine.begin() as conn:
+        result = conn.execute(
+            CLEANUP_FUTURE_DATES_SQL,
+            {
+                "max_expected_year": current_year + 1,
+                "max_shiftable_year": current_year + 100,
+            },
+        )
+    return int(result.rowcount or 0)
 
 
 def refresh_updates(start_year: int = 1950) -> list[dict[str, int | str]]:
@@ -85,6 +126,10 @@ def refresh_updates(start_year: int = 1950) -> list[dict[str, int | str]]:
                 "dataset_version": dataset_version,
             },
         )
+
+    corrected_rows = cleanup_future_dates()
+    if corrected_rows:
+        import_log.append({"year": "cleanup", "revision": "date-fix", "attempted_rows": corrected_rows, "inserted_rows": corrected_rows, "filename": "tornado_event"})
 
     return import_log
 
