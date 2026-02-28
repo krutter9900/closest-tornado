@@ -49,7 +49,7 @@ def inum(x):
     return int(float(x)) if x else None
 
 
-def parse_dt(s: str | None) -> str | None:
+def parse_dt(s: str | None, source_year: int | None = None) -> str | None:
     s = (s or "").strip()
     if not s:
         return None
@@ -58,6 +58,12 @@ def parse_dt(s: str | None) -> str | None:
     for fmt in ("%d-%b-%y %H:%M:%S", "%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(s, fmt)
+
+            # NOAA commonly stores two-digit years in older files. Python's %y
+            # pivot (1969-2068) can map 1950s/1960s rows into the future.
+            if fmt == "%d-%b-%y %H:%M:%S" and source_year is not None and dt.year > source_year + 1:
+                dt = dt.replace(year=dt.year - 100)
+
             return dt.isoformat(sep="T")
         except ValueError:
             pass
@@ -75,6 +81,13 @@ def make_linestring_wkt(begin_lon, begin_lat, end_lon, end_lat) -> str:
     if end_lon is None or end_lat is None:
         end_lon, end_lat = begin_lon, begin_lat
     return f"LINESTRING({begin_lon} {begin_lat}, {end_lon} {end_lat})"
+
+
+def source_year_from_filename(csv_path: Path) -> int | None:
+    match = re.search(r"_d(\d{4})_", csv_path.name)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def latest_details_filename(year: int) -> str:
@@ -130,6 +143,7 @@ def ensure_downloaded_filename(gz_name: str) -> Path:
 def import_year(csv_path: Path) -> tuple[int, int]:
     attempted = 0
     inserted = 0
+    source_year = source_year_from_filename(csv_path)
     with engine.begin() as conn:
         with open(csv_path, newline="", encoding="utf-8") as f:
             r = csv.DictReader(f)
@@ -153,8 +167,8 @@ def import_year(csv_path: Path) -> tuple[int, int]:
 
                 params = {
                     "event_id": int(row["EVENT_ID"]),
-                    "begin_dt": parse_dt(row.get("BEGIN_DATE_TIME")),
-                    "end_dt": parse_dt(row.get("END_DATE_TIME")),
+                    "begin_dt": parse_dt(row.get("BEGIN_DATE_TIME"), source_year=source_year),
+                    "end_dt": parse_dt(row.get("END_DATE_TIME"), source_year=source_year),
                     "state": (row.get("STATE") or None),
                     "cz_name": (row.get("CZ_NAME") or None),
                     "wfo": (row.get("WFO") or None),
