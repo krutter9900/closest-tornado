@@ -121,7 +121,8 @@ def home():
       <div class="legend">
         <div class="legend-row"><span class="swatch" style="background:#22c55e"></span>User point</div>
         <div class="legend-row"><span class="swatch" style="background:#f97316"></span>Closest point</div>
-        <div class="legend-row"><span class="sw-line"></span>Tornado track</div>
+        <div class="legend-row"><span class="sw-line" style="background:#3b82f6"></span>Other top-5 tracks</div>
+        <div class="legend-row"><span class="sw-line" style="background:#60a5fa; height:6px;"></span>Selected track</div>
         <div class="legend-row"><span class="sw-corridor"></span>Damage path corridor</div>
       </div>
     </section>
@@ -151,7 +152,7 @@ def home():
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'imperial' }), 'bottom-right');
 
     function resetLayers() {
-      for (const id of ['corridor-outline', 'corridor', 'track', 'closest', 'user']) {
+      for (const id of ['corridor-outline', 'corridor', 'tracks', 'closest', 'user']) {
         if (map.getLayer(id)) map.removeLayer(id);
         if (map.getSource(id)) map.removeSource(id);
       }
@@ -214,15 +215,41 @@ def home():
         });
       }
 
-      map.addSource('track', { type: 'geojson', data: { type: 'Feature', geometry: selected.track_geojson }});
+      const tracks = latestPayload.top_results
+        .filter(item => item.track_geojson)
+        .map((item, idx) => ({
+          type: 'Feature',
+          properties: {
+            idx,
+            isSelected: idx === selectedIndex
+          },
+          geometry: item.track_geojson
+        }));
+
+      map.addSource('tracks', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: tracks
+        }
+      });
       map.addSource('closest', { type: 'geojson', data: { type: 'Feature', geometry: selected.closest_point_geojson }});
       map.addSource('user', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }}});
 
-      map.addLayer({ id: 'track', type: 'line', source: 'track', paint: { 'line-width': 4, 'line-color': '#4f9cff' }});
+      map.addLayer({
+        id: 'tracks',
+        type: 'line',
+        source: 'tracks',
+        paint: {
+          'line-width': ['case', ['boolean', ['get', 'isSelected'], false], 6, 3],
+          'line-color': ['case', ['boolean', ['get', 'isSelected'], false], '#60a5fa', '#3b82f6'],
+          'line-opacity': ['case', ['boolean', ['get', 'isSelected'], false], 0.98, 0.5]
+        }
+      });
       map.addLayer({ id: 'closest', type: 'circle', source: 'closest', paint: { 'circle-radius': 7, 'circle-color': '#f97316', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }});
       map.addLayer({ id: 'user', type: 'circle', source: 'user', paint: { 'circle-radius': 7, 'circle-color': '#22c55e', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }});
 
-      const coords = selected.track_geojson.coordinates.slice();
+      const coords = tracks.flatMap(feature => feature.geometry.coordinates);
       coords.push([q.lon, q.lat]);
       const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
       map.fitBounds(bounds, { padding: 72, maxZoom: 14, duration: 700 });
