@@ -1,17 +1,20 @@
 import json
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import text
 
 from .db import engine, run_migrations
-from .geocode import geocode_oneline
+from .geocode import GeocoderUnavailableError, NoGeocodeMatchError, geocode_oneline
+from .guardrails import SimpleRateLimiter, RateLimitConfig, TTLCache
 from .schemas import ClosestTornadoRequest, ClosestTornadoResponse
 from .web import router as web_router
-from .guardrails import SimpleRateLimiter, RateLimitConfig, TTLCache
 
-app = FastAPI(title="Closest Tornado API", version="0.4.0")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Closest Tornado API", version="0.5.0")
 app.include_router(web_router)
 
-# Guardrails (single-instance / local)
 rate_limiter = SimpleRateLimiter(RateLimitConfig(max_requests=30, window_seconds=60))
 result_cache = TTLCache(ttl_seconds=6 * 3600, max_items=5000)
 
@@ -28,32 +31,29 @@ def health():
 
 @app.post("/closest-tornado", response_model=ClosestTornadoResponse)
 async def closest_tornado(req: ClosestTornadoRequest, request: Request):
-    # Rate limit (per IP)
     client_ip = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client_ip):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
 
-    # Geocode (do not log/store address)
     try:
         g = await geocode_oneline(req.address)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except NoGeocodeMatchError:
+        raise HTTPException(status_code=400, detail="No geocoding match found for that input.")
+    except GeocoderUnavailableError:
+        raise HTTPException(status_code=503, detail="Geocoding services are temporarily unavailable.")
+    except Exception:
+        logger.exception("Unexpected geocoding failure")
+        raise HTTPException(status_code=500, detail="Unexpected error while geocoding.")
 
     lat, lon = g["lat"], g["lon"]
-
-    # Cache by rounded coordinates (no address stored)
     lat_r = round(lat, 4)
     lon_r = round(lon, 4)
-    cache_key = ("closest_v1", lat_r, lon_r)
+    cache_key = ("closest_v2", lat_r, lon_r, req.units)
 
     cached = result_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    # Nearest query:
-    # - center_m: distance to track centerline
-    # - edge_m: distance to estimated damage-path edge (width/2 buffer) when width available
-    # - primary_m: edge_m if available else center_m
     sql = text("""
     WITH user_pt AS (
       SELECT
@@ -101,6 +101,7 @@ async def closest_tornado(req: ClosestTornadoRequest, request: Request):
     primary_m = edge_m if edge_m is not None else center_m
     dist_km = primary_m / 1000.0
     dist_miles = primary_m / 1609.344
+    selected_distance = dist_miles if req.units == "miles" else dist_km
 
     distance_type = "estimated_damage_path_edge" if edge_m is not None else "centerline"
 
@@ -125,6 +126,8 @@ async def closest_tornado(req: ClosestTornadoRequest, request: Request):
             "distance_m": primary_m,
             "distance_miles": dist_miles,
             "distance_km": dist_km,
+            "selected_unit": req.units,
+            "selected_distance": selected_distance,
             "distance_type": distance_type,
             "tor_f_scale": row.get("tor_f_scale"),
             "begin_dt": row.get("begin_dt").isoformat() if row.get("begin_dt") else None,
