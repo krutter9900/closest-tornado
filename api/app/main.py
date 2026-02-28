@@ -2,17 +2,20 @@ import json
 import logging
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import text
 
 from .db import engine, run_migrations
 from .geocode import GeocoderUnavailableError, NoGeocodeMatchError, geocode_oneline
 from .guardrails import RateLimitConfig, SimpleRateLimiter, TTLCache
+from .guardrails import SimpleRateLimiter, RateLimitConfig, TTLCache
 from .schemas import ClosestTornadoRequest, ClosestTornadoResponse
 from .web import router as web_router
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Closest Tornado API", version="0.6.0")
+app = FastAPI(title="Closest Tornado API", version="0.5.0")
 app.include_router(web_router)
 
 rate_limiter = SimpleRateLimiter(RateLimitConfig(max_requests=30, window_seconds=60))
@@ -51,6 +54,26 @@ def _serialize_row(row, units: str):
     dist_miles = primary_m / 1609.344
     selected_distance = dist_miles if units == "miles" else dist_km
     distance_type = "estimated_damage_path_edge" if edge_m is not None else "centerline"
+@app.post("/closest-tornado", response_model=ClosestTornadoResponse)
+async def closest_tornado(req: ClosestTornadoRequest, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
+
+    try:
+        g = await geocode_oneline(req.address)
+    except NoGeocodeMatchError:
+        raise HTTPException(status_code=400, detail="No geocoding match found for that input.")
+    except GeocoderUnavailableError:
+        raise HTTPException(status_code=503, detail="Geocoding services are temporarily unavailable.")
+    except Exception:
+        logger.exception("Unexpected geocoding failure")
+        raise HTTPException(status_code=500, detail="Unexpected error while geocoding.")
+
+    lat, lon = g["lat"], g["lon"]
+    lat_r = round(lat, 4)
+    lon_r = round(lon, 4)
+    cache_key = ("closest_v2", lat_r, lon_r, req.units)
 
     return {
         "event_id": int(row["event_id"]),
