@@ -25,6 +25,14 @@ class SchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ClosestTornadoRequest(address="123 Main St, Tulsa, OK", top_n=7)
 
+    def test_year_range_defaults_and_validation(self):
+        payload = ClosestTornadoRequest(address="123 Main St, Tulsa, OK")
+        self.assertEqual(payload.start_year, 1950)
+        self.assertEqual(payload.end_year, 2100)
+
+        with self.assertRaises(ValidationError):
+            ClosestTornadoRequest(address="123 Main St, Tulsa, OK", start_year=2000, end_year=1999)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -130,7 +130,7 @@ def _serialize_row(row, units: str):
     }
 
 
-def _query_top_rows(lat: float, lon: float, limit: int = 5):
+def _query_top_rows(lat: float, lon: float, limit: int = 5, start_year: int = 1950, end_year: int = 2100):
     sql = text("""
     WITH user_pt AS (
       SELECT
@@ -161,6 +161,8 @@ def _query_top_rows(lat: float, lon: float, limit: int = 5):
           )
         END AS corridor_geojson
       FROM tornado_event t
+      WHERE t.begin_dt IS NOT NULL
+        AND EXTRACT(YEAR FROM t.begin_dt) BETWEEN :start_year AND :end_year
       ORDER BY t.geog_line <-> (SELECT geog FROM user_pt)
       LIMIT 250
     ),
@@ -176,20 +178,20 @@ def _query_top_rows(lat: float, lon: float, limit: int = 5):
     """)
 
     with engine.begin() as conn:
-        result = conn.execute(sql, {"lat": lat, "lon": lon, "limit": limit}).mappings()
+        result = conn.execute(sql, {"lat": lat, "lon": lon, "limit": limit, "start_year": start_year, "end_year": end_year}).mappings()
         if hasattr(result, "all"):
             return result.all()
         first = result.first()
         return [first] if first is not None else []
 
 
-def _build_response(lat: float, lon: float, provider: str, match_type: str | None, units: str, host_url: str, top_n: int = 5):
-    rows = _query_top_rows(lat, lon, limit=top_n)
+def _build_response(lat: float, lon: float, provider: str, match_type: str | None, units: str, host_url: str, top_n: int = 5, start_year: int = 1950, end_year: int = 2100):
+    rows = _query_top_rows(lat, lon, limit=top_n, start_year=start_year, end_year=end_year)
     if not rows:
         raise HTTPException(status_code=404, detail="No tornado data loaded.")
 
     top_results = [_serialize_row(row, units) for row in rows]
-    share_url = f"{host_url}?lat={lat:.6f}&lon={lon:.6f}&units={units}&top_n={top_n}"
+    share_url = f"{host_url}?lat={lat:.6f}&lon={lon:.6f}&units={units}&top_n={top_n}&start_year={start_year}&end_year={end_year}"
     return {
         "query": {
             "lat": lat,
@@ -224,7 +226,7 @@ async def closest_tornado(req: ClosestTornadoRequest, request: Request):
 
     lat_r = round(lat, 4)
     lon_r = round(lon, 4)
-    cache_key = ("closest_v4", lat_r, lon_r, req.units, req.top_n)
+    cache_key = ("closest_v5", lat_r, lon_r, req.units, req.top_n, req.start_year, req.end_year)
     cached = result_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -237,6 +239,8 @@ async def closest_tornado(req: ClosestTornadoRequest, request: Request):
         units=req.units,
         host_url=str(request.base_url).rstrip("/"),
         top_n=req.top_n,
+        start_year=req.start_year,
+        end_year=req.end_year,
     )
     result_cache.set(cache_key, response)
     return response
@@ -249,6 +253,8 @@ def closest_tornado_by_coords(
     lon: float = Query(..., ge=-180, le=180),
     units: str = Query("miles", pattern="^(miles|km)$"),
     top_n: Literal[5, 10, 15] = Query(5),
+    start_year: int = Query(1950, ge=1950, le=2100),
+    end_year: int = Query(2100, ge=1950, le=2100),
 ):
     client_ip = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client_ip):
@@ -257,7 +263,10 @@ def closest_tornado_by_coords(
 
     lat_r = round(lat, 4)
     lon_r = round(lon, 4)
-    cache_key = ("closest_coords_v2", lat_r, lon_r, units, top_n)
+    if end_year < start_year:
+        raise HTTPException(status_code=422, detail="end_year must be greater than or equal to start_year")
+
+    cache_key = ("closest_coords_v3", lat_r, lon_r, units, top_n, start_year, end_year)
     cached = result_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -270,6 +279,8 @@ def closest_tornado_by_coords(
         units=units,
         host_url=str(request.base_url).rstrip("/"),
         top_n=top_n,
+        start_year=start_year,
+        end_year=end_year,
     )
     result_cache.set(cache_key, response)
     return response
