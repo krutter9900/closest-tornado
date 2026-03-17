@@ -102,14 +102,16 @@ def latest_details_filename(year: int) -> str:
 
 def latest_details_files_by_year(start_year: int = 1950, end_year: int | None = None) -> dict[int, dict[str, str]]:
     """Return the newest NOAA details file per year using the cYYYYMMDD revision token."""
-    if end_year is None:
-        end_year = datetime.utcnow().year
-
     html = subprocess.check_output(["curl", "-s", BASE_URL], text=True)
     pattern = re.compile(r"(StormEvents_details-ftp_v1\.0_d(\d{4})_c(\d+)\.csv\.gz)")
+    matches = pattern.findall(html)
+
+    if end_year is None:
+        available_years = [int(year_s) for _, year_s, _ in matches]
+        end_year = max(available_years, default=datetime.utcnow().year)
 
     latest: dict[int, dict[str, str]] = {}
-    for filename, year_s, revision in pattern.findall(html):
+    for filename, year_s, revision in matches:
         year = int(year_s)
         if year < start_year or year > end_year:
             continue
