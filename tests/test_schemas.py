@@ -18,6 +18,13 @@ class SchemaTests(unittest.TestCase):
         payload = ClosestTornadoRequest(address="123 Main St, Tulsa, OK")
         self.assertEqual(payload.units, "miles")
 
+    def test_top_n_default_and_validation(self):
+        payload = ClosestTornadoRequest(address="123 Main St, Tulsa, OK")
+        self.assertEqual(payload.top_n, 5)
+
+        with self.assertRaises(ValidationError):
+            ClosestTornadoRequest(address="123 Main St, Tulsa, OK", top_n=7)
+
 
 if __name__ == "__main__":
     unittest.main()

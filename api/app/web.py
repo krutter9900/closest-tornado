@@ -42,7 +42,7 @@ def home():
     label { color: var(--muted); font-size: 0.78rem; display: block; margin: 0 0 6px; letter-spacing: .35px; text-transform: uppercase; }
     .field, .select, .button { width: 100%; border-radius: 11px; border: 1px solid var(--border); font-size: 0.95rem; }
     .field, .select { background: #0f1930; color: var(--text); padding: 11px 12px; }
-    .controls { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
+    .controls { display: grid; grid-template-columns: 1fr 140px 100px; gap: 8px; }
     .button { cursor: pointer; border: none; font-weight: 600; color: white; padding: 11px 14px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
     .button:disabled { filter: grayscale(0.35) brightness(0.8); cursor: default; }
     .panel { background: rgba(7, 13, 25, 0.72); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
@@ -79,7 +79,7 @@ def home():
     <section class="card sidebar">
       <div>
         <h1 class="title">Closest Tornado</h1>
-        <p class="subtitle">Find the nearest tornado tracks, compare the top 5, and share a privacy-safe link using only coordinates.</p>
+        <p class="subtitle">Find the nearest tornado tracks, compare the top 5, 10, or 15, and share a privacy-safe link using only coordinates.</p>
       </div>
 
       <div>
@@ -93,6 +93,14 @@ def home():
           <select id="units" class="select" aria-label="Units">
             <option value="miles" selected>Miles</option>
             <option value="km">Kilometers</option>
+          </select>
+        </div>
+        <div>
+          <label for="topN">Top results</label>
+          <select id="topN" class="select" aria-label="Top results">
+            <option value="5" selected>Top 5</option>
+            <option value="10">Top 10</option>
+            <option value="15">Top 15</option>
           </select>
         </div>
         <div style="display:flex; align-items:flex-end;">
@@ -109,7 +117,7 @@ def home():
       </section>
 
       <section class="panel">
-        <label style="margin-top:0">Top 5 closest tornadoes</label>
+        <label style="margin-top:0">Closest tornadoes</label>
         <div class="results" id="resultsList">
           <div class="status">No results yet.</div>
         </div>
@@ -121,7 +129,7 @@ def home():
       <div class="legend">
         <div class="legend-row"><span class="swatch" style="background:#22c55e"></span>User point</div>
         <div class="legend-row"><span class="swatch" style="background:#f97316"></span>Closest point</div>
-        <div class="legend-row"><span class="sw-line" style="background:#3b82f6"></span>Other top-5 tracks</div>
+        <div class="legend-row"><span class="sw-line" style="background:#3b82f6"></span>Other selected top tracks</div>
         <div class="legend-row"><span class="sw-line" style="background:#60a5fa; height:6px;"></span>Selected track</div>
         <div class="legend-row"><span class="sw-corridor"></span>Damage path corridor</div>
       </div>
@@ -134,6 +142,7 @@ def home():
     const addr = document.getElementById('addr');
     const btn = document.getElementById('go');
     const units = document.getElementById('units');
+    const topN = document.getElementById('topN');
     const list = document.getElementById('resultsList');
     const shareWrap = document.getElementById('shareWrap');
     const shareLinkEl = document.getElementById('shareLink');
@@ -141,6 +150,7 @@ def home():
 
     let latestPayload = null;
     let selectedIndex = 0;
+    let lastSearch = null;
 
     const map = new maplibregl.Map({
       container: 'map',
@@ -258,6 +268,7 @@ def home():
     async function loadFromAddress() {
       const address = addr.value.trim();
       const selectedUnits = units.value;
+      const selectedTopN = Number(topN.value);
       if (!address) return;
 
       btn.disabled = true;
@@ -266,7 +277,7 @@ def home():
         const res = await fetch('/closest-tornado', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ address, units: selectedUnits })
+          body: JSON.stringify({ address, units: selectedUnits, top_n: selectedTopN })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -275,6 +286,7 @@ def home():
         }
 
         latestPayload = data;
+        lastSearch = { type: 'address', address };
         selectedIndex = 0;
         renderShare(data.share_url);
         renderList(data);
@@ -286,18 +298,20 @@ def home():
       }
     }
 
-    async function loadFromShare(lat, lon, selectedUnits) {
+    async function loadFromShare(lat, lon, selectedUnits, selectedTopN = 5) {
       btn.disabled = true;
       units.value = selectedUnits;
+      topN.value = String(selectedTopN);
       statusEl.textContent = 'Loading shared link…';
       try {
-        const res = await fetch(`/closest-tornado-by-coords?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&units=${encodeURIComponent(selectedUnits)}`);
+        const res = await fetch(`/closest-tornado-by-coords?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&units=${encodeURIComponent(selectedUnits)}&top_n=${encodeURIComponent(selectedTopN)}`);
         const data = await res.json();
         if (!res.ok) {
           statusEl.innerHTML = `<span class="error">${data.detail || 'Shared lookup failed'}</span>`;
           return;
         }
         latestPayload = data;
+        lastSearch = { type: 'coords', lat, lon };
         selectedIndex = 0;
         renderShare(data.share_url);
         renderList(data);
@@ -320,15 +334,30 @@ def home():
       }
     });
 
+    async function refreshLatestSearchIfAny() {
+      if (!lastSearch) return;
+      if (lastSearch.type === 'address') {
+        await loadFromAddress();
+        return;
+      }
+      if (lastSearch.type === 'coords') {
+        await loadFromShare(lastSearch.lat, lastSearch.lon, units.value, Number(topN.value));
+      }
+    }
+
     btn.addEventListener('click', loadFromAddress);
     addr.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromAddress(); });
+    topN.addEventListener('change', refreshLatestSearchIfAny);
 
     const params = new URLSearchParams(window.location.search);
     const lat = params.get('lat');
     const lon = params.get('lon');
     const u = params.get('units') || 'miles';
+    const topNParam = Number(params.get('top_n') || '5');
+    const validTopN = [5, 10, 15].includes(topNParam) ? topNParam : 5;
+    topN.value = String(validTopN);
     if (lat && lon) {
-      loadFromShare(lat, lon, u === 'km' ? 'km' : 'miles');
+      loadFromShare(lat, lon, u === 'km' ? 'km' : 'miles', validTopN);
     }
   </script>
 </body>

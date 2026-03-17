@@ -91,5 +91,45 @@ class EndpointTests(unittest.TestCase):
                 self.assertEqual(ok.json()["updated_years"], 0)
 
 
+    def test_top_n_request_controls_result_count(self):
+        sample_row = {
+            "event_id": 1,
+            "center_m": 1609.344,
+            "edge_m": None,
+            "tor_f_scale": "EF1",
+            "begin_dt": None,
+            "end_dt": None,
+            "state": "OK",
+            "cz_name": "Oklahoma",
+            "wfo": "OUN",
+            "tor_length_miles": 1.2,
+            "tor_width_yards": 100,
+            "track_geojson": '{"type":"LineString","coordinates":[[-97.5,35.4],[-97.4,35.5]]}',
+            "closest_pt_geojson": '{"type":"Point","coordinates":[-97.45,35.45]}',
+            "corridor_geojson": None,
+        }
+
+        def fake_query_top_rows(lat, lon, limit=5):
+            return [dict(sample_row, event_id=i) for i in range(1, limit + 1)]
+
+        with patch.object(main, "run_migrations", lambda: None), patch.object(
+            main,
+            "geocode_oneline",
+            AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"}),
+        ), patch.object(main, "_query_top_rows", side_effect=fake_query_top_rows):
+            with TestClient(main.app) as client:
+                res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles", "top_n": 10})
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertEqual(len(data["top_results"]), 10)
+                self.assertIn("top_n=10", data["share_url"])
+
+    def test_coords_endpoint_rejects_invalid_top_n(self):
+        with patch.object(main, "run_migrations", lambda: None):
+            with TestClient(main.app) as client:
+                res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "top_n": 7})
+                self.assertEqual(res.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
