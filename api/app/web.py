@@ -49,6 +49,12 @@ def home():
     .button:disabled { filter: grayscale(0.35) brightness(0.8); cursor: default; }
     .panel { background: rgba(7, 13, 25, 0.72); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
     .status { margin: 0; color: var(--muted); font-size: 0.84rem; }
+    .disclaimer {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
     .share-wrap { display: flex; gap: 8px; margin-top: 8px; }
     .share-link { flex: 1; min-width: 0; font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px dashed var(--border); border-radius: 8px; padding: 8px; }
     .copy-btn { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #14203a; color: var(--text); cursor: pointer; }
@@ -132,6 +138,10 @@ def home():
           <div class="share-link" id="shareLink"></div>
           <button class="copy-btn" id="copyBtn">Copy</button>
         </div>
+      </section>
+
+      <section class="panel">
+        <p class="disclaimer"><strong>Data disclaimer:</strong> NOAA Storm Events data is published with an approximately 90-day delay and is refreshed monthly, so the most recent events may not be reflected yet.</p>
       </section>
 
       <section class="panel">
