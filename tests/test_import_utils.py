@@ -45,6 +45,17 @@ class ImportUtilsTests(unittest.TestCase):
         self.assertEqual(result[2020]["revision"], "20240222")
         self.assertEqual(result[2021]["filename"], "StormEvents_details-ftp_v1.0_d2021_c20240105.csv.gz")
 
+    def test_latest_details_files_by_year_defaults_to_max_available_year(self):
+        listing = """
+        StormEvents_details-ftp_v1.0_d2025_c20250103.csv.gz
+        StormEvents_details-ftp_v1.0_d2026_c20260110.csv.gz
+        """
+        with patch("api.app.import_noaa_year.subprocess.check_output", return_value=listing):
+            result = latest_details_files_by_year(start_year=2025)
+
+        self.assertIn(2026, result)
+        self.assertEqual(result[2026]["revision"], "20260110")
+
 
 if __name__ == "__main__":
     unittest.main()

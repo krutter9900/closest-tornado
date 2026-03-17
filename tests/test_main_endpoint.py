@@ -52,7 +52,6 @@ class EndpointTests(unittest.TestCase):
                 self.assertEqual(data["result"]["selected_unit"], "km")
                 self.assertAlmostEqual(data["result"]["selected_distance"], 1.609344, places=6)
 
-
     def test_future_shifted_years_are_normalized(self):
         with patch.object(main, "run_migrations", lambda: None), patch.object(main, "geocode_oneline", AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"})), patch.object(main.engine, "begin", fake_begin):
             original_execute = FakeConn.execute
@@ -79,7 +78,6 @@ class EndpointTests(unittest.TestCase):
                     self.assertEqual(data["result"]["begin_dt"], "1963-04-29T22:00:00")
                     self.assertEqual(data["result"]["end_dt"], "1963-04-29T22:10:00")
 
-
     def test_admin_refresh_requires_token(self):
         with patch.object(main, "run_migrations", lambda: None), patch.object(main.settings, "admin_refresh_token", "secret"), patch.object(main, "refresh_updates", return_value=[]):
             with TestClient(main.app) as client:
@@ -89,6 +87,87 @@ class EndpointTests(unittest.TestCase):
                 ok = client.post("/admin/refresh-noaa", headers={"Authorization": "Bearer secret"})
                 self.assertEqual(ok.status_code, 200)
                 self.assertEqual(ok.json()["updated_years"], 0)
+
+    def test_top_n_request_controls_result_count(self):
+        sample_row = {
+            "event_id": 1,
+            "center_m": 1609.344,
+            "edge_m": None,
+            "tor_f_scale": "EF1",
+            "begin_dt": None,
+            "end_dt": None,
+            "state": "OK",
+            "cz_name": "Oklahoma",
+            "wfo": "OUN",
+            "tor_length_miles": 1.2,
+            "tor_width_yards": 100,
+            "track_geojson": '{"type":"LineString","coordinates":[[-97.5,35.4],[-97.4,35.5]]}',
+            "closest_pt_geojson": '{"type":"Point","coordinates":[-97.45,35.45]}',
+            "corridor_geojson": None,
+        }
+
+        def fake_query_top_rows(lat, lon, limit=5, start_year=1950, end_year=2100):
+            return [dict(sample_row, event_id=i) for i in range(1, limit + 1)]
+
+        with patch.object(main, "run_migrations", lambda: None), patch.object(
+            main,
+            "geocode_oneline",
+            AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"}),
+        ), patch.object(main, "_query_top_rows", side_effect=fake_query_top_rows):
+            with TestClient(main.app) as client:
+                res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles", "top_n": 10})
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertEqual(len(data["top_results"]), 10)
+                self.assertIn("top_n=10", data["share_url"])
+
+    def test_year_range_filters_are_forwarded(self):
+        captured = {}
+
+        def fake_query_top_rows(lat, lon, limit=5, start_year=1950, end_year=2100):
+            captured["start_year"] = start_year
+            captured["end_year"] = end_year
+            return [{
+                "event_id": 5,
+                "center_m": 1000,
+                "edge_m": None,
+                "tor_f_scale": "EF0",
+                "begin_dt": main.datetime(1992, 1, 2, 3, 4, 5),
+                "end_dt": None,
+                "state": "OK",
+                "cz_name": "Test",
+                "wfo": "OUN",
+                "tor_length_miles": 1.0,
+                "tor_width_yards": 10,
+                "track_geojson": '{"type":"LineString","coordinates":[[-97.5,35.4],[-97.4,35.5]]}',
+                "closest_pt_geojson": '{"type":"Point","coordinates":[-97.45,35.45]}',
+                "corridor_geojson": None,
+            }]
+
+        with patch.object(main, "run_migrations", lambda: None), patch.object(
+            main,
+            "geocode_oneline",
+            AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"}),
+        ), patch.object(main, "_query_top_rows", side_effect=fake_query_top_rows):
+            with TestClient(main.app) as client:
+                res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles", "start_year": 1980, "end_year": 2000})
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(captured["start_year"], 1980)
+                self.assertEqual(captured["end_year"], 2000)
+                self.assertIn("start_year=1980", res.json()["share_url"])
+                self.assertIn("end_year=2000", res.json()["share_url"])
+
+    def test_coords_endpoint_rejects_invalid_top_n(self):
+        with patch.object(main, "run_migrations", lambda: None):
+            with TestClient(main.app) as client:
+                res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "top_n": 7})
+                self.assertEqual(res.status_code, 422)
+
+    def test_coords_endpoint_rejects_invalid_year_range(self):
+        with patch.object(main, "run_migrations", lambda: None):
+            with TestClient(main.app) as client:
+                res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "top_n": 5, "start_year": 2005, "end_year": 2000})
+                self.assertEqual(res.status_code, 422)
 
 
 if __name__ == "__main__":
