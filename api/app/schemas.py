@@ -6,6 +6,7 @@ import string
 class ClosestTornadoRequest(BaseModel):
     address: str = Field(..., min_length=5, max_length=200)
     units: Literal["miles", "km"] = "miles"
+    top_n: Literal[5, 10, 15] = 5
 
     @field_validator("address")
     @classmethod
