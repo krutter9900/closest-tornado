@@ -57,7 +57,7 @@ class RegressionDatasetTests(unittest.TestCase):
         fixtures = Path("tests/regression_cases.json")
         cases = json.loads(fixtures.read_text(encoding="utf-8"))
 
-        def fake_query_top_rows(lat, lon, limit=5):
+        def fake_query_top_rows(lat, lon, limit=5, start_year=1950, end_year=2100):
             if (round(lat, 4), round(lon, 4)) == (35.4676, -97.5164):
                 base_m = 1609.344
                 event_id = 101

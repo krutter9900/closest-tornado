@@ -6,6 +6,9 @@ import string
 class ClosestTornadoRequest(BaseModel):
     address: str = Field(..., min_length=5, max_length=200)
     units: Literal["miles", "km"] = "miles"
+    top_n: Literal[5, 10, 15] = 5
+    start_year: int = Field(1950, ge=1950, le=2100)
+    end_year: int = Field(2100, ge=1950, le=2100)
 
     @field_validator("address")
     @classmethod
@@ -18,6 +21,14 @@ class ClosestTornadoRequest(BaseModel):
         if "  " in v:
             v = " ".join(v.split())
         return v
+
+    @field_validator("end_year")
+    @classmethod
+    def end_year_not_before_start(cls, end_year: int, info):
+        start_year = info.data.get("start_year", 1950)
+        if end_year < start_year:
+            raise ValueError("end_year must be greater than or equal to start_year.")
+        return end_year
 
 
 class GeocodeInfo(BaseModel):
