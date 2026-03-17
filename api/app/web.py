@@ -43,6 +43,8 @@ def home():
     .field, .select, .button { width: 100%; border-radius: 11px; border: 1px solid var(--border); font-size: 0.95rem; }
     .field, .select { background: #0f1930; color: var(--text); padding: 11px 12px; }
     .controls { display: grid; grid-template-columns: 1fr 140px 100px; gap: 8px; }
+    .year-range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .year-value { margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
     .button { cursor: pointer; border: none; font-weight: 600; color: white; padding: 11px 14px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
     .button:disabled { filter: grayscale(0.35) brightness(0.8); cursor: default; }
     .panel { background: rgba(7, 13, 25, 0.72); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
@@ -108,6 +110,22 @@ def home():
         </div>
       </div>
 
+      <div>
+        <label>Year range</label>
+        <div class="year-range">
+          <div>
+            <label for="startYear" style="margin-bottom:4px;">Start year</label>
+            <input id="startYear" class="field" type="range" min="1950" max="2100" step="1" value="1950" />
+            <div class="year-value" id="startYearValue">1950</div>
+          </div>
+          <div>
+            <label for="endYear" style="margin-bottom:4px;">End year</label>
+            <input id="endYear" class="field" type="range" min="1950" max="2100" step="1" value="2100" />
+            <div class="year-value" id="endYearValue">2100</div>
+          </div>
+        </div>
+      </div>
+
       <section class="panel">
         <p class="status" id="status">Ready. Enter an address or open a shared link.</p>
         <div class="share-wrap" id="shareWrap" style="display:none;">
@@ -143,6 +161,10 @@ def home():
     const btn = document.getElementById('go');
     const units = document.getElementById('units');
     const topN = document.getElementById('topN');
+    const startYear = document.getElementById('startYear');
+    const endYear = document.getElementById('endYear');
+    const startYearValue = document.getElementById('startYearValue');
+    const endYearValue = document.getElementById('endYearValue');
     const list = document.getElementById('resultsList');
     const shareWrap = document.getElementById('shareWrap');
     const shareLinkEl = document.getElementById('shareLink');
@@ -160,6 +182,20 @@ def home():
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'imperial' }), 'bottom-right');
+
+
+
+    function syncYearLabels() {
+      startYearValue.textContent = startYear.value;
+      endYearValue.textContent = endYear.value;
+    }
+
+    function normalizeYearRange() {
+      if (Number(startYear.value) > Number(endYear.value)) {
+        endYear.value = startYear.value;
+      }
+      syncYearLabels();
+    }
 
     function resetLayers() {
       for (const id of ['corridor-outline', 'corridor', 'tracks', 'closest', 'user']) {
@@ -266,9 +302,12 @@ def home():
     }
 
     async function loadFromAddress() {
+      normalizeYearRange();
       const address = addr.value.trim();
       const selectedUnits = units.value;
       const selectedTopN = Number(topN.value);
+      const selectedStartYear = Number(startYear.value);
+      const selectedEndYear = Number(endYear.value);
       if (!address) return;
 
       btn.disabled = true;
@@ -277,7 +316,13 @@ def home():
         const res = await fetch('/closest-tornado', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ address, units: selectedUnits, top_n: selectedTopN })
+          body: JSON.stringify({
+            address,
+            units: selectedUnits,
+            top_n: selectedTopN,
+            start_year: selectedStartYear,
+            end_year: selectedEndYear
+          })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -298,13 +343,16 @@ def home():
       }
     }
 
-    async function loadFromShare(lat, lon, selectedUnits, selectedTopN = 5) {
+    async function loadFromShare(lat, lon, selectedUnits, selectedTopN = 5, selectedStartYear = 1950, selectedEndYear = 2100) {
       btn.disabled = true;
       units.value = selectedUnits;
       topN.value = String(selectedTopN);
+      startYear.value = String(selectedStartYear);
+      endYear.value = String(selectedEndYear);
+      normalizeYearRange();
       statusEl.textContent = 'Loading shared link…';
       try {
-        const res = await fetch(`/closest-tornado-by-coords?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&units=${encodeURIComponent(selectedUnits)}&top_n=${encodeURIComponent(selectedTopN)}`);
+        const res = await fetch(`/closest-tornado-by-coords?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&units=${encodeURIComponent(selectedUnits)}&top_n=${encodeURIComponent(selectedTopN)}&start_year=${encodeURIComponent(selectedStartYear)}&end_year=${encodeURIComponent(selectedEndYear)}`);
         const data = await res.json();
         if (!res.ok) {
           statusEl.innerHTML = `<span class="error">${data.detail || 'Shared lookup failed'}</span>`;
@@ -341,13 +389,20 @@ def home():
         return;
       }
       if (lastSearch.type === 'coords') {
-        await loadFromShare(lastSearch.lat, lastSearch.lon, units.value, Number(topN.value));
+        await loadFromShare(lastSearch.lat, lastSearch.lon, units.value, Number(topN.value), Number(startYear.value), Number(endYear.value));
       }
     }
 
     btn.addEventListener('click', loadFromAddress);
     addr.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromAddress(); });
     topN.addEventListener('change', refreshLatestSearchIfAny);
+    startYear.addEventListener('input', () => { normalizeYearRange(); });
+    endYear.addEventListener('input', () => {
+      if (Number(endYear.value) < Number(startYear.value)) startYear.value = endYear.value;
+      syncYearLabels();
+    });
+    startYear.addEventListener('change', refreshLatestSearchIfAny);
+    endYear.addEventListener('change', refreshLatestSearchIfAny);
 
     const params = new URLSearchParams(window.location.search);
     const lat = params.get('lat');
@@ -355,9 +410,16 @@ def home():
     const u = params.get('units') || 'miles';
     const topNParam = Number(params.get('top_n') || '5');
     const validTopN = [5, 10, 15].includes(topNParam) ? topNParam : 5;
+    const startYearParam = Number(params.get('start_year') || '1950');
+    const endYearParam = Number(params.get('end_year') || '2100');
+    const validStartYear = Math.min(2100, Math.max(1950, startYearParam));
+    const validEndYear = Math.min(2100, Math.max(validStartYear, endYearParam));
     topN.value = String(validTopN);
+    startYear.value = String(validStartYear);
+    endYear.value = String(validEndYear);
+    syncYearLabels();
     if (lat && lon) {
-      loadFromShare(lat, lon, u === 'km' ? 'km' : 'miles', validTopN);
+      loadFromShare(lat, lon, u === 'km' ? 'km' : 'miles', validTopN, validStartYear, validEndYear);
     }
   </script>
 </body>

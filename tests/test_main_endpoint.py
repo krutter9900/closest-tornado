@@ -109,7 +109,9 @@ class EndpointTests(unittest.TestCase):
             "corridor_geojson": None,
         }
 
-        def fake_query_top_rows(lat, lon, limit=5):
+        def fake_query_top_rows(lat, lon, limit=5, start_year=1950, end_year=2100):
+            self.assertEqual(start_year, 1990)
+            self.assertEqual(end_year, 2000)
             return [dict(sample_row, event_id=i) for i in range(1, limit + 1)]
 
         with patch.object(main, "run_migrations", lambda: None), patch.object(
@@ -118,16 +120,25 @@ class EndpointTests(unittest.TestCase):
             AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"}),
         ), patch.object(main, "_query_top_rows", side_effect=fake_query_top_rows):
             with TestClient(main.app) as client:
-                res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles", "top_n": 10})
+                res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles", "top_n": 10, "start_year": 1990, "end_year": 2000})
                 self.assertEqual(res.status_code, 200)
                 data = res.json()
                 self.assertEqual(len(data["top_results"]), 10)
                 self.assertIn("top_n=10", data["share_url"])
+                self.assertIn("start_year=1990", data["share_url"])
+                self.assertIn("end_year=2000", data["share_url"])
 
     def test_coords_endpoint_rejects_invalid_top_n(self):
         with patch.object(main, "run_migrations", lambda: None):
             with TestClient(main.app) as client:
                 res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "top_n": 7})
+                self.assertEqual(res.status_code, 422)
+
+
+    def test_coords_endpoint_rejects_invalid_year_range(self):
+        with patch.object(main, "run_migrations", lambda: None):
+            with TestClient(main.app) as client:
+                res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "start_year": 2000, "end_year": 1990})
                 self.assertEqual(res.status_code, 422)
 
 
