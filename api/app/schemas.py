@@ -1,14 +1,15 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional, Any, Dict, List
 import string
+from datetime import datetime
 
 
 class ClosestTornadoRequest(BaseModel):
     address: str = Field(..., min_length=5, max_length=200)
     units: Literal["miles", "km"] = "miles"
     top_n: Literal[5, 10, 15] = 5
-    start_year: int = Field(1950, ge=1950, le=2100)
-    end_year: int = Field(2100, ge=1950, le=2100)
+    start_year: int = Field(1950, ge=1950)
+    end_year: int = Field(default_factory=lambda: datetime.utcnow().year, ge=1950)
 
     @field_validator("address")
     @classmethod
@@ -22,10 +23,22 @@ class ClosestTornadoRequest(BaseModel):
             v = " ".join(v.split())
         return v
 
+
+    @field_validator("start_year")
+    @classmethod
+    def start_year_not_in_future(cls, v: int) -> int:
+        current_year = datetime.utcnow().year
+        if v > current_year:
+            raise ValueError(f"start_year must be less than or equal to {current_year}")
+        return v
+
     @field_validator("end_year")
     @classmethod
     def end_year_not_before_start(cls, v: int, info):
         start = info.data.get("start_year")
+        current_year = datetime.utcnow().year
+        if v > current_year:
+            raise ValueError(f"end_year must be less than or equal to {current_year}")
         if start is not None and v < start:
             raise ValueError("end_year must be greater than or equal to start_year")
         return v

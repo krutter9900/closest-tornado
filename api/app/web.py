@@ -173,6 +173,12 @@ def home():
     let latestPayload = null;
     let selectedIndex = 0;
     let lastSearch = null;
+    const currentYear = new Date().getUTCFullYear();
+
+    startYear.max = String(currentYear);
+    endYear.max = String(currentYear);
+    if (Number(endYear.value) > currentYear) endYear.value = String(currentYear);
+    if (Number(document.getElementById("endYearValue").textContent) > currentYear) document.getElementById("endYearValue").textContent = String(currentYear);
 
     const map = new maplibregl.Map({
       container: 'map',
@@ -343,7 +349,7 @@ def home():
       }
     }
 
-    async function loadFromShare(lat, lon, selectedUnits, selectedTopN = 5, selectedStartYear = 1950, selectedEndYear = 2100) {
+    async function loadFromShare(lat, lon, selectedUnits, selectedTopN = 5, selectedStartYear = 1950, selectedEndYear = currentYear) {
       btn.disabled = true;
       units.value = selectedUnits;
       topN.value = String(selectedTopN);
@@ -411,9 +417,9 @@ def home():
     const topNParam = Number(params.get('top_n') || '5');
     const validTopN = [5, 10, 15].includes(topNParam) ? topNParam : 5;
     const startYearParam = Number(params.get('start_year') || '1950');
-    const endYearParam = Number(params.get('end_year') || '2100');
-    const validStartYear = Math.min(2100, Math.max(1950, startYearParam));
-    const validEndYear = Math.min(2100, Math.max(validStartYear, endYearParam));
+    const endYearParam = Number(params.get('end_year') || String(currentYear));
+    const validStartYear = Math.min(currentYear, Math.max(1950, startYearParam));
+    const validEndYear = Math.min(currentYear, Math.max(validStartYear, endYearParam));
     topN.value = String(validTopN);
     startYear.value = String(validStartYear);
     endYear.value = String(validEndYear);

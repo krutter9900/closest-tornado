@@ -23,6 +23,10 @@ rate_limiter = SimpleRateLimiter(RateLimitConfig(max_requests=30, window_seconds
 result_cache = TTLCache(ttl_seconds=6 * 3600, max_items=5000)
 
 
+def _current_year() -> int:
+    return datetime.utcnow().year
+
+
 @app.on_event("startup")
 def _startup():
     run_migrations()
@@ -95,8 +99,8 @@ def _serialize_row(row, units: str):
     def normalize_future_shifted(dt_value):
         if dt_value is None:
             return None
-        current_year = datetime.utcnow().year
-        if current_year + 1 < dt_value.year <= current_year + 100:
+        current_year = _current_year()
+        if current_year + 5 < dt_value.year <= current_year + 100:
             return dt_value.replace(year=dt_value.year - 100)
         return dt_value
 
@@ -130,7 +134,9 @@ def _serialize_row(row, units: str):
     }
 
 
-def _query_top_rows(lat: float, lon: float, limit: int = 5, start_year: int = 1950, end_year: int = 2100):
+def _query_top_rows(lat: float, lon: float, limit: int = 5, start_year: int = 1950, end_year: int | None = None):
+    if end_year is None:
+        end_year = _current_year()
     sql = text("""
     WITH user_pt AS (
       SELECT
@@ -185,7 +191,9 @@ def _query_top_rows(lat: float, lon: float, limit: int = 5, start_year: int = 19
         return [first] if first is not None else []
 
 
-def _build_response(lat: float, lon: float, provider: str, match_type: str | None, units: str, host_url: str, top_n: int = 5, start_year: int = 1950, end_year: int = 2100):
+def _build_response(lat: float, lon: float, provider: str, match_type: str | None, units: str, host_url: str, top_n: int = 5, start_year: int = 1950, end_year: int | None = None):
+    if end_year is None:
+        end_year = _current_year()
     rows = _query_top_rows(lat, lon, limit=top_n, start_year=start_year, end_year=end_year)
     if not rows:
         raise HTTPException(status_code=404, detail="No tornado data loaded.")
@@ -253,14 +261,21 @@ def closest_tornado_by_coords(
     lon: float = Query(..., ge=-180, le=180),
     units: str = Query("miles", pattern="^(miles|km)$"),
     top_n: Literal[5, 10, 15] = Query(5),
-    start_year: int = Query(1950, ge=1950, le=2100),
-    end_year: int = Query(2100, ge=1950, le=2100),
+    start_year: int = Query(1950, ge=1950),
+    end_year: int | None = Query(None, ge=1950),
 ):
     client_ip = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client_ip):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
 
 
+    current_year = _current_year()
+    if start_year > current_year:
+        raise HTTPException(status_code=422, detail=f"start_year must be less than or equal to {current_year}")
+    if end_year is None:
+        end_year = current_year
+    if end_year > current_year:
+        raise HTTPException(status_code=422, detail=f"end_year must be less than or equal to {current_year}")
     lat_r = round(lat, 4)
     lon_r = round(lon, 4)
     if end_year < start_year:

@@ -54,7 +54,7 @@ class EndpointTests(unittest.TestCase):
 
 
     def test_future_shifted_years_are_normalized(self):
-        with patch.object(main, "run_migrations", lambda: None), patch.object(main, "geocode_oneline", AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"})), patch.object(main.engine, "begin", fake_begin):
+        with patch.object(main, "run_migrations", lambda: None), patch.object(main, "geocode_oneline", AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"})), patch.object(main.engine, "begin", fake_begin), patch.object(main, "_current_year", return_value=2025):
             original_execute = FakeConn.execute
 
             def execute_with_future_dates(self, *args, **kwargs):
@@ -73,12 +73,42 @@ class EndpointTests(unittest.TestCase):
 
             with patch.object(FakeConn, "execute", execute_with_future_dates):
                 with TestClient(main.app) as client:
+                    main.result_cache._store.clear()
                     res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles"})
                     self.assertEqual(res.status_code, 200)
                     data = res.json()
                     self.assertEqual(data["result"]["begin_dt"], "1963-04-29T22:00:00")
                     self.assertEqual(data["result"]["end_dt"], "1963-04-29T22:10:00")
 
+
+
+
+    def test_near_future_years_are_not_shifted(self):
+        with patch.object(main, "run_migrations", lambda: None), patch.object(main, "geocode_oneline", AsyncMock(return_value={"lat": 35.4, "lon": -97.5, "provider": "test", "match_type": "rooftop"})), patch.object(main.engine, "begin", fake_begin), patch.object(main, "_current_year", return_value=2025):
+            original_execute = FakeConn.execute
+
+            def execute_with_2026_date(self, *args, **kwargs):
+                result = original_execute(self, *args, **kwargs).first()
+                result["begin_dt"] = main.datetime(2026, 5, 1, 2, 30, 0)
+                result["end_dt"] = main.datetime(2026, 5, 1, 2, 45, 0)
+
+                class _Result:
+                    def mappings(self_inner):
+                        return self_inner
+
+                    def first(self_inner):
+                        return result
+
+                return _Result()
+
+            with patch.object(FakeConn, "execute", execute_with_2026_date):
+                with TestClient(main.app) as client:
+                    main.result_cache._store.clear()
+                    res = client.post("/closest-tornado", json={"address": "123 Main St, Oklahoma City, OK", "units": "miles"})
+                    self.assertEqual(res.status_code, 200)
+                    data = res.json()
+                    self.assertEqual(data["result"]["begin_dt"], "2026-05-01T02:30:00")
+                    self.assertEqual(data["result"]["end_dt"], "2026-05-01T02:45:00")
 
     def test_admin_refresh_requires_token(self):
         with patch.object(main, "run_migrations", lambda: None), patch.object(main.settings, "admin_refresh_token", "secret"), patch.object(main, "refresh_updates", return_value=[]):
@@ -139,6 +169,13 @@ class EndpointTests(unittest.TestCase):
         with patch.object(main, "run_migrations", lambda: None):
             with TestClient(main.app) as client:
                 res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "start_year": 2000, "end_year": 1990})
+                self.assertEqual(res.status_code, 422)
+
+
+    def test_coords_endpoint_rejects_years_above_current_year(self):
+        with patch.object(main, "run_migrations", lambda: None), patch.object(main, "_current_year", return_value=2026):
+            with TestClient(main.app) as client:
+                res = client.get("/closest-tornado-by-coords", params={"lat": 35.4, "lon": -97.5, "units": "miles", "end_year": 2027})
                 self.assertEqual(res.status_code, 422)
 
 
